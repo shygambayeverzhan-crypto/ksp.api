@@ -1,0 +1,14 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {quote,SCALE,available,reserved,createOrder,decide,expire,requestWithdrawal,completeWithdrawal} from '../ledger.js';
+const initial=()=>({deposit:100*SCALE,payable:0,commissionKzt:0,rate:485,orders:[],withdrawals:[],requisites:[{id:'test',active:true,details:'DEMO'}]});
+test('20000 KZT less 10% at 485 = 37.113402 USDT',()=>assert.equal(quote(20000,485),37113402));
+test('invalid inputs rejected',()=>{for(const n of [0,-1,NaN,Infinity,1.2])assert.throws(()=>quote(n,485));});
+test('confirmation consumes reserve only once',()=>{const s=initial(),o=createOrder(s,20000,0);assert.equal(reserved(s),37113402);decide(s,o.id,'confirm',1);assert.equal(s.deposit,62886598);assert.equal(s.payable,37113402);assert.equal(s.commissionKzt,2000);assert.equal(reserved(s),0);assert.throws(()=>decide(s,o.id,'confirm',2));});
+test('expiry releases reserve at exactly 25 minutes',()=>{const s=initial();createOrder(s,20000,0);expire(s,1499999);assert.equal(reserved(s),37113402);expire(s,1500000);assert.equal(reserved(s),0);assert.equal(available(s),100*SCALE);});
+test('late confirmation cannot consume other reservations',()=>{const s=initial(),o=createOrder(s,20000,0);expire(s,1500000);createOrder(s,40000,1500001);assert.throws(()=>decide(s,o.id,'confirm',1500002));assert.equal(s.payable,0);});
+test('late confirmation with sufficient deposit',()=>{const s=initial(),o=createOrder(s,20000,0);decide(s,o.id,'confirm',1500001);assert.equal(s.payable,o.units);});
+test('rejection releases funds',()=>{const s=initial(),o=createOrder(s,20000,0);decide(s,o.id,'reject',1);assert.equal(o.reason,'rejected');assert.equal(available(s),100*SCALE);assert.equal(s.payable,0);});
+test('issued requisites and rate are snapshots',()=>{const s=initial(),o=createOrder(s,20000,0);s.requisites[0].details='changed';s.rate=490;assert.equal(o.requisite.details,'DEMO');assert.equal(o.rate,485);});
+test('inactive requisites and insufficient funds prevent creation',()=>{const s=initial();assert.throws(()=>createOrder(s,1000000,0));s.requisites[0].active=false;assert.throws(()=>createOrder(s,100,0));assert.equal(s.orders.length,0);});
+test('withdrawal cannot overspend or debit deposit twice',()=>{const s=initial();s.payable=50*SCALE;const w=requestWithdrawal(s,40*SCALE,'T'+'1'.repeat(33));assert.throws(()=>requestWithdrawal(s,20*SCALE,'T'+'1'.repeat(33)));completeWithdrawal(s,w.id,'a'.repeat(64));assert.equal(s.payable,10*SCALE);assert.equal(s.deposit,100*SCALE);assert.throws(()=>completeWithdrawal(s,w.id,'b'.repeat(64)));});
